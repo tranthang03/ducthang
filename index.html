@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Gửi em</title>
+<style>
+:root{--bg:#000;--ink:#cfe8ff;--pink:#ff7aa8;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#000;--ink:#cfe8ff}}
+:root[data-theme="dark"]{--bg:#000;--ink:#cfe8ff}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);overflow:hidden;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+canvas{position:fixed;inset:0;width:100%;height:100%}
+#rain{transition:opacity 1.2s}
+#start,#finale{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:env(safe-area-inset-top,0px) 24px env(safe-area-inset-bottom,0px)}
+#start{background:rgba(0,0,0,.72);transition:opacity .8s}
+#start button,#finale button{font:inherit;color:var(--ink);background:none;border:1px solid var(--ink);border-radius:999px;padding:14px 32px;font-size:18px;cursor:pointer}
+#start button:focus-visible,#finale button:focus-visible{outline:2px solid var(--pink);outline-offset:3px}
+#start p{margin:0 0 22px;font-size:15px;opacity:.75}
+#finale{justify-content:flex-end;padding-bottom:calc(env(safe-area-inset-bottom,0px) + 9vh);pointer-events:none;opacity:0;transition:opacity 2s}
+#finale.on{opacity:1}
+#finale h1{margin:0 0 18px;font-size:clamp(28px,6vw,52px);font-weight:800;color:#ffd6e3;letter-spacing:.01em}
+#finale button{pointer-events:auto;font-size:14px;padding:9px 20px;opacity:.6}
+</style>
+</head>
+<body>
+<canvas id="rain"></canvas>
+<canvas id="fx"></canvas>
+<audio id="bgm" src="nhac.mp3" loop preload="auto"></audio>
+<div id="finale"><h1 id="fin"></h1><button id="again" type="button">Xem lại</button></div>
+<div id="start"><p>Có một điều anh muốn nói với em</p><button id="go" type="button">Chạm để mở</button></div>
+<script>
+// ====== SỬA NỘI DUNG Ở ĐÂY ======
+const CONFIG = {
+  rainWord: "I LOVE YOU ",
+  countdown: 3,
+  countHold: 2200,              // mỗi số nằm yên bao lâu (mili giây)
+  countGap: 900,                // nghỉ giữa các số (mili giây)
+  steps: [
+    { lines: ["Anh muốn tiến xa hơn"], hold: 3000 },
+    { lines: ["trong mối quan hệ này"], hold: 3000 },
+    { lines: ["Em đồng ý"], hold: 2600 },
+    { lines: ["Làm bạn gái", "Anh nhé"], hold: 3600 }
+  ],
+  finale: "I Love You ♥"
+};
+// =================================
+const rain = document.getElementById('rain'), fx = document.getElementById('fx');
+const rc = rain.getContext('2d'), pc = fx.getContext('2d');
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+let W, H, dpr, fs = 16, drops = [], parts = [], mode = 'text', running = 0;
+
+function resize(){
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  W = innerWidth; H = innerHeight;
+  for (const c of [rain, fx]){ c.width = W * dpr; c.height = H * dpr; }
+  rc.setTransform(dpr,0,0,dpr,0,0); pc.setTransform(dpr,0,0,dpr,0,0);
+  rc.fillStyle = '#000'; rc.fillRect(0,0,W,H);
+  drops = Array.from({length: Math.ceil(W / fs)}, () => ({ y: -Math.random() * H / fs, i: Math.floor(Math.random() * 20), s: .18 + Math.random() * .4 }));
+}
+addEventListener('resize', resize); resize();
+
+function rainFrame(){
+  rc.fillStyle = 'rgba(0,0,0,.09)'; rc.fillRect(0,0,W,H);
+  rc.font = fs + 'px monospace'; rc.textBaseline = 'top';
+  const w = CONFIG.rainWord;
+  drops.forEach((d, c) => {
+    const prev = Math.floor(d.y); d.y += d.s;
+    if (Math.floor(d.y) !== prev){
+      d.i++;
+      rc.fillStyle = Math.random() < .03 ? '#ffffff' : '#5fa8ff';
+      rc.fillText(w[d.i % w.length], c * fs, Math.floor(d.y) * fs);
+      if (Math.floor(d.y) * fs > H && Math.random() > .96) d.y = 0;
+    }
+  });
+}
+
+function wrapLines(c, lines, maxW){
+  const out = [];
+  for (const ln of lines){
+    let cur = '';
+    for (const word of ln.split(' ')){
+      const t = cur ? cur + ' ' + word : word;
+      if (c.measureText(t).width > maxW && cur){ out.push(cur); cur = word; } else cur = t;
+    }
+    out.push(cur);
+  }
+  return out;
+}
+
+function textPoints(lines){
+  const o = document.createElement('canvas'); o.width = W; o.height = H;
+  const c = o.getContext('2d');
+  const size = Math.min(W * .13, H * .14, 110);
+  c.font = `800 ${size}px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif`;
+  c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = '#fff';
+  const ls = wrapLines(c, lines, W * .86), lh = size * 1.25;
+  ls.forEach((t, i) => c.fillText(t, W / 2, H / 2 + (i - (ls.length - 1) / 2) * lh));
+  const gap = Math.max(3, Math.round(size / 20)), data = c.getImageData(0, 0, W, H).data, pts = [];
+  for (let y = 0; y < H; y += gap) for (let x = 0; x < W; x += gap)
+    if (data[(y * W + x) * 4 + 3] > 128) pts.push({ x, y, r: Math.max(2, gap * .55), c: '#cfe8ff' });
+  return pts;
+}
+
+function heartPoints(){
+  const s = Math.min(W, H * .95) / 40, pts = [], cx = W / 2, cy = H * .44;
+  for (let L = 1; L >= .12; L -= .11){
+    const n = Math.floor(150 * L + 30);
+    for (let i = 0; i < n; i++){
+      const t = i / n * Math.PI * 2;
+      const x = 16 * Math.pow(Math.sin(t), 3);
+      const y = -(13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t));
+      pts.push({ ox: x * s * L + (Math.random() - .5) * 3, oy: y * s * L + (Math.random() - .5) * 3, r: 2.2,
+                 c: `hsl(${345 + (1 - L) * 15},100%,${62 + (1 - L) * 26}%)` });
+    }
+  }
+  return pts.map(p => ({ ...p, x: cx + p.ox, y: cy + p.oy, cx, cy }));
+}
+
+function setTargets(pts){
+  const live = parts.filter(p => !p.dying);
+  pts.sort(() => Math.random() - .5);
+  pts.forEach((pt, i) => {
+    let p = live[i];
+    if (!p){ p = { x: Math.random() * W, y: -20 - Math.random() * H * .3, a: 0, dying: false }; parts.push(p); }
+    Object.assign(p, { tx: pt.x, ty: pt.y, ox: pt.ox, oy: pt.oy, cx: pt.cx, cy: pt.cy, r: pt.r, c: pt.c, e: .05 + Math.random() * .06 });
+  });
+  for (let i = pts.length; i < live.length; i++) kill(live[i]);
+}
+function kill(p){ p.dying = true; p.tx = p.x + (Math.random() - .5) * 80; p.ty = H + 40; p.e = .025; }
+function scatter(){ parts.forEach(p => { if (!p.dying) kill(p); }); }
+
+function fxFrame(t){
+  pc.clearRect(0, 0, W, H);
+  const pulse = 1 + .045 * Math.sin(t / 240);
+  for (const p of parts){
+    let tx = p.tx, ty = p.ty;
+    if (mode === 'heart' && !p.dying){ tx = p.cx + p.ox * pulse; ty = p.cy + p.oy * pulse; }
+    p.x += (tx - p.x) * p.e; p.y += (ty - p.y) * p.e;
+    if (mode === 'text' && !p.dying){ p.x += (Math.random() - .5) * .5; p.y += (Math.random() - .5) * .5; }
+    p.a = p.dying ? p.a - .02 : Math.min(1, p.a + .05);
+    if (p.a <= 0) continue;
+    pc.globalAlpha = p.a; pc.fillStyle = p.c; pc.fillRect(p.x, p.y, p.r, p.r);
+  }
+  pc.globalAlpha = 1;
+  parts = parts.filter(p => !(p.dying && p.a <= 0));
+}
+
+function loop(t){ rainFrame(); fxFrame(t); requestAnimationFrame(loop); }
+requestAnimationFrame(loop);
+
+async function play(){
+  const id = ++running, ok = () => id === running;
+  mode = 'text'; parts.forEach(p => { if (!p.dying) kill(p); });
+  document.getElementById('finale').classList.remove('on');
+  await sleep(1800); if (!ok()) return;
+  rain.style.opacity = .6;
+  for (let n = CONFIG.countdown; n > 0; n--){
+    setTargets(textPoints([String(n)])); await sleep(CONFIG.countHold); if (!ok()) return;
+    scatter(); await sleep(CONFIG.countGap); if (!ok()) return;
+  }
+  for (const s of CONFIG.steps){
+    setTargets(textPoints(s.lines)); await sleep(s.hold); if (!ok()) return;
+    scatter(); await sleep(600); if (!ok()) return;
+  }
+  mode = 'heart'; setTargets(heartPoints());
+  document.getElementById('fin').textContent = CONFIG.finale;
+  await sleep(1500); if (!ok()) return;
+  document.getElementById('finale').classList.add('on');
+}
+
+document.getElementById('go').addEventListener('click', () => {
+  document.getElementById('bgm').play().catch(() => {});
+  const s = document.getElementById('start'); s.style.opacity = 0;
+  setTimeout(() => s.remove(), 800); play();
+});
+document.getElementById('again').addEventListener('click', () => {
+  const a = document.getElementById('bgm'); a.currentTime = 0; a.play().catch(() => {});
+  rain.style.opacity = 1; play();
+});
+</script>
+</body>
+</html>
